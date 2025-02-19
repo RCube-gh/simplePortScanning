@@ -81,9 +81,14 @@ int main(int argc, char *argv[]){
 		exit(1);
 	}
 	printf("[+] Raw socket created successfully\n");
+    int one=1;
+    if(setsockopt(sock,IPPROTO_IP,IP_HDRINCL,&one,sizeof(one))<0){
+        perror("[-] Error setting socket options");
+        exit(1);
+    }
 
-	//allocate memory for packet
-	char packet[sizeof(struct ipheader)];
+	//allocate memory for packet (IP+TCP header)
+	char packet[sizeof(struct ipheader)+sizeof(struct tcpheader)];
 	memset(packet,0,sizeof(packet));
 
 	struct ipheader *ip=(struct ipheader *)packet;
@@ -104,7 +109,8 @@ int main(int argc, char *argv[]){
 
     struct tcpheader *tcp=(struct tcpheader *)(packet+sizeof(struct ipheader));
     srand(time(0));//random source port
-    tcp->source=htons(rand()%65535);
+    //tcp->source=htons(rand()%65535);
+    tcp->source=htons(12345);
     tcp->dest=htons(dst_port);
     tcp->seq=htonl(0);//initial sequence number
     tcp->ack_seq=0;
@@ -129,6 +135,53 @@ int main(int argc, char *argv[]){
     printf("[+] TCP header created successfully\n");
     printf("[+] destination port: %d\n",dst_port);
     printf("SYN packet ready\n");
+
+    //destination details
+    struct sockaddr_in dest;
+    dest.sin_family=AF_INET;
+    dest.sin_port=htons(dst_port);
+    dest.sin_addr.s_addr=inet_addr(dst_ip);
+
+
+    //send the synn packet
+    if(sendto(sock,packet,sizeof(packet),0,(struct sockaddr*)&dest, sizeof(dest))<0){
+        perror("[-] Error sending packet");
+        exit(1);
+    }
+    printf("[+] SYN packet sent to %s:%d\n",dst_ip,dst_port);
+
+
+
+
+    struct timeval timeout;
+    timeout.tv_sec=3;
+    timeout.tv_usec=0;
+    setsockopt(sock,SOL_SOCKET,SO_RCVTIMEO,&timeout,sizeof(timeout));
+    char buffer[1024];
+    struct sockaddr_in sender_addr;
+    socklen_t addr_len=sizeof(sender_addr);
+
+
+
+
+
+    printf("[+] Listening for responses...\n");
+    ssize_t recv_len=recvfrom(sock,buffer,sizeof(buffer),0,(struct sockaddr *)&sender_addr,&addr_len);
+    if(recv_len<0){
+        printf("[-] No response (port is filtered or host is down)\n");
+    }else{
+        struct ipheader *ip_resp=(struct ipheader *)buffer;
+        int ip_header_len=ip_resp->ihl*4;
+        struct tcpheader *tcp_resp=(struct tcpheader *)(buffer+ip_header_len);
+
+        if(ntohs(tcp->dest)==dst_port){
+            if(tcp->flags==0x12){
+                printf("[+] Port %d is OPEN!\n",dst_port);
+            }else if(tcp->flags==0x14){
+                printf("[-] Port %d is CLOSED!\n",dst_port);
+            }
+        }
+    }
 
 	close(sock);
 	return 0;
